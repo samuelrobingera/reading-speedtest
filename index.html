@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reading Speed Tester</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for aesthetic enhancements and mobile responsiveness */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fc; /* Light background */
+            color: #1f2937;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            padding-top: 2rem;
+        }
+
+        /* Styling for the reading text container */
+        #reading-text-container {
+            line-height: 1.8;
+            font-size: 1.5rem;
+            font-weight: 500;
+            text-align: justify;
+            min-height: 150px;
+            padding: 1.5rem;
+            background-color: white;
+            border: 2px solid #e5e7eb;
+        }
+
+        .highlighted-word {
+            color: #10b981; /* Emerald 500 */
+            font-weight: 700;
+            transition: color 0.1s;
+        }
+
+        .current-word {
+            background-color: #fcd34d; /* Amber 300 */
+            border-radius: 4px;
+            padding: 2px 4px;
+            margin: 0 -4px;
+            transition: background-color 0.2s;
+        }
+
+        button {
+            transition: all 0.2s;
+        }
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+        }
+
+        @media (max-width: 640px) {
+            #reading-text-container {
+                font-size: 1.25rem;
+            }
+            body {
+                padding-top: 1rem;
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+        }
+    </style>
+    <!-- Firebase SDK Imports for Mandatory Setup -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Set log level for debugging
+        setLogLevel('Debug');
+
+        // Global variables for Firebase access
+        window.app = null;
+        window.db = null;
+        window.auth = null;
+        window.userId = null;
+
+        const initFirebase = async () => {
+            try {
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+
+                if (Object.keys(firebaseConfig).length === 0) {
+                    console.error("Firebase config is empty. Cannot initialize.");
+                    return;
+                }
+
+                window.app = initializeApp(firebaseConfig);
+                window.db = getFirestore(window.app);
+                window.auth = getAuth(window.app);
+
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(window.auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(window.auth);
+                }
+
+                window.userId = window.auth.currentUser?.uid || crypto.randomUUID();
+                console.log("Firebase initialized. User ID:", window.userId);
+
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+            }
+        };
+
+        // Call initFirebase, but the main app logic will wait for it in the script below
+        initFirebase();
+    </script>
+</head>
+<body class="p-4">
+
+    <div id="app-container" class="w-full max-w-2xl mx-auto space-y-6">
+        <h1 class="text-4xl font-extrabold text-center text-gray-800 mb-6">
+            Dynamic Reading Speed Test
+        </h1>
+        <div id="user-id-display" class="text-sm text-center text-gray-400 mb-4">
+            <!-- User ID will be displayed here after auth -->
+        </div>
+
+        <!-- Quote Display Area -->
+        <div id="reading-text-container" class="rounded-lg shadow-xl">
+            <p id="quote-display" class="select-none text-gray-600 italic p-8 text-center">
+                Fetching a new quote...
+            </p>
+        </div>
+
+        <!-- Controls and Status -->
+        <div class="flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-lg shadow-md">
+            <div id="status-message" class="text-lg font-medium text-gray-700 mb-2 sm:mb-0">
+                Loading...
+            </div>
+            <button id="start-button" onclick="toggleReading()" disabled class="px-6 py-3 bg-indigo-400 text-white font-semibold rounded-full shadow-lg cursor-not-allowed">
+                Start Reading
+            </button>
+        </div>
+
+        <!-- Results Display -->
+        <div id="results-display" class="hidden bg-emerald-50 border-l-4 border-emerald-500 text-emerald-800 p-4 rounded-lg shadow-inner mt-4">
+            <h3 class="text-xl font-bold mb-2">Results</h3>
+            <p><span class="font-semibold">Words Per Minute (WPM):</span> <span id="wpm-result" class="text-2xl font-extrabold text-emerald-700">0</span></p>
+            <p><span class="font-semibold">Time Taken:</span> <span id="time-result">0.00 seconds</span></p>
+        </div>
+
+         <!-- Error/Message Modal -->
+        <div id="message-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center p-4 z-50">
+            <div class="bg-white p-6 rounded-lg shadow-2xl max-w-sm w-full text-center">
+                <p id="modal-text" class="text-lg font-semibold text-red-600 mb-4"></p>
+                <button onclick="document.getElementById('message-modal').classList.add('hidden')" class="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration & State Variables ---
+        let currentQuoteText = "Loading a fresh quote...";
+        let quoteWords = [];
+        let totalWords = 0;
+        let recognition;
+        let currentWordIndex = 0;
+        let startTime = 0;
+        let isReading = false;
+        const apiKey = ""; // This will be empty and automatically provided by the Canvas environment if needed
+
+        // --- DOM Elements ---
+        const quoteDisplayEl = document.getElementById('quote-display');
+        const startButton = document.getElementById('start-button');
+        const statusMessageEl = document.getElementById('status-message');
+        const resultsDisplayEl = document.getElementById('results-display');
+        const wpmResultEl = document.getElementById('wpm-result');
+        const timeResultEl = document.getElementById('time-result');
+        const messageModal = document.getElementById('message-modal');
+        const modalText = document.getElementById('modal-text');
+        const userIdDisplayEl = document.getElementById('user-id-display');
+
+        // --- Utility Functions ---
+
+        /**
+         * Cleans the quote string for comparison (removes punctuation, converts to lowercase).
+         * @param {string} text The quote text.
+         * @returns {string[]} Array of cleaned words.
+         */
+        const cleanAndSplitQuote = (text) => {
+            // Remove punctuation and convert to lowercase for accurate matching
+            const cleaned = text.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").toLowerCase();
+            return cleaned.split(/\s+/).filter(word => word.length > 0);
+        };
+
+        /**
+         * Shows a custom modal message.
+         * @param {string} message The message to display.
+         */
+        const showMessage = (message) => {
+            modalText.textContent = message;
+            messageModal.classList.remove('hidden');
+            console.error(message);
+        };
+
+        /**
+         * Fetches a new quote from the Gemini API using the specified model.
+         */
+        const fetchNewQuote = async () => {
+            statusMessageEl.textContent = 'Fetching a new quote for you...';
+            startButton.disabled = true;
+
+            const userQuery = "Generate a short, motivational quote from a famous person. The response must be cleaned of all punctuation and capitalization, and contain between 15 and 25 words. Only return the quote text.";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: {
+                    parts: [{ text: "You are a quote generator for a reading speed test application. Your sole task is to provide a clean, unpunctuated quote text." }]
+                },
+            };
+
+            let result = null;
+            let retries = 0;
+            const maxRetries = 5;
+            const fallbackQuote = "The greatest glory in living lies not in never falling but in rising every time we fall";
+
+            while (retries < maxRetries) {
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.status === 429) {
+                        const delay = Math.pow(2, retries) * 1000;
+                        retries++;
+                        console.warn(`Rate limit exceeded. Retrying in ${delay / 1000}s...`);
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        continue;
+                    }
+
+                    if (!response.ok) {
+                        throw new Error(`API response status: ${response.status}`);
+                    }
+
+                    result = await response.json();
+                    break; // Success
+                } catch (error) {
+                    retries++;
+                    console.error("Fetch attempt failed:", error);
+                    if (retries >= maxRetries) {
+                        console.error("Failed to fetch a new quote after several attempts. Using fallback quote.");
+                        break;
+                    }
+                    const delay = Math.pow(2, retries) * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+
+            // Process result or use fallback
+            let newQuote = fallbackQuote;
+            if (result && result.candidates && result.candidates.length > 0 && result.candidates[0].content?.parts?.[0]?.text) {
+                newQuote = result.candidates[0].content.parts[0].text.trim();
+            }
+
+            currentQuoteText = newQuote;
+            quoteWords = cleanAndSplitQuote(currentQuoteText);
+            totalWords = quoteWords.length;
+
+            renderQuote();
+
+            // Check if a quote was actually loaded (not just an empty string)
+            if (totalWords > 0) {
+                statusMessageEl.textContent = 'Quote loaded. Press "Start Reading" when ready.';
+                startButton.disabled = false;
+                startButton.classList.remove('bg-indigo-400', 'cursor-not-allowed');
+                startButton.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+            } else {
+                 statusMessageEl.textContent = 'Error: Could not load a valid quote text.';
+            }
+
+            // Display User ID if available
+            if (window.userId) {
+                userIdDisplayEl.textContent = `User ID: ${window.userId}`;
+            } else {
+                 // Wait a bit for auth to complete
+                 setTimeout(() => {
+                    if (window.userId) {
+                        userIdDisplayEl.textContent = `User ID: ${window.userId}`;
+                    } else {
+                        userIdDisplayEl.textContent = 'User ID: N/A (Authentication pending)';
+                    }
+                 }, 1000);
+            }
+        };
+
+
+        /**
+         * Renders the quote into individual span elements for highlighting.
+         */
+        const renderQuote = () => {
+            // Display the original quote text (with spaces preserved)
+            const words = currentQuoteText.split(/\s+/).filter(w => w.length > 0);
+
+            // If no quote is loaded yet, display loading message
+            if (words.length === 0 || currentQuoteText === "Loading a fresh quote...") {
+                 quoteDisplayEl.innerHTML = `<span class="text-gray-400 italic">${currentQuoteText}</span>`;
+                 return;
+            }
+
+            quoteDisplayEl.innerHTML = words.map((word, index) => {
+                // Initial highlighting for the first word
+                const initialClass = index === 0 ? 'current-word' : 'text-gray-600';
+                return `<span id="word-${index}" class="inline-block mx-1 ${initialClass}">${word}</span>`;
+            }).join(' ');
+
+            // Ensure the first word is correctly highlighted on load
+            updateHighlighting(0);
+        };
+
+        /**
+         * Updates the UI to highlight the word at the current index.
+         * @param {number} index The index of the word to highlight as the target.
+         */
+        const updateHighlighting = (index) => {
+            // Remove previous 'current-word' styling and add 'highlighted-word'
+            for (let i = 0; i < totalWords; i++) {
+                const wordEl = document.getElementById(`word-${i}`);
+                if (!wordEl) continue;
+
+                wordEl.classList.remove('current-word');
+
+                if (i < index) {
+                    // Words that have been read (index < current index) are green
+                    wordEl.classList.add('highlighted-word');
+                } else {
+                    wordEl.classList.remove('highlighted-word');
+                    if (i === index) {
+                        // The word currently expected (index == current index) is yellow
+                        wordEl.classList.add('current-word');
+                    }
+                }
+            }
+        };
+
+        /**
+         * Initializes and starts the Web Speech Recognition API.
+         */
+        const startRecognition = () => {
+            window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+            if (!window.SpeechRecognition) {
+                showMessage("Speech Recognition is not supported in this browser. Try Chrome or Firefox.");
+                return;
+            }
+
+            recognition = new SpeechRecognition();
+            recognition.continuous = true; // Keep listening
+            recognition.interimResults = false; // Only send final results
+            recognition.lang = 'en-US';
+
+            // --- Event Handlers ---
+
+            recognition.onstart = () => {
+                isReading = true;
+                startTime = performance.now();
+                startButton.textContent = 'Stop Test';
+                startButton.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+                startButton.classList.add('bg-red-600', 'hover:bg-red-700');
+                statusMessageEl.textContent = 'Listening... Please start reading the quote aloud.';
+                resultsDisplayEl.classList.add('hidden');
+                console.log('Speech recognition started.');
+                // Ensure highlighting is correct when starting
+                updateHighlighting(currentWordIndex);
+            };
+
+            recognition.onresult = (event) => {
+                const results = event.results;
+                let recognizedTranscript = '';
+
+                // Concatenate all results from the current speech segment
+                for (let i = event.resultIndex; i < results.length; i++) {
+                    if (results[i].isFinal) {
+                        recognizedTranscript += results[i][0].transcript;
+                    }
+                }
+
+                if (recognizedTranscript) {
+                    processRecognizedText(recognizedTranscript.toLowerCase());
+                }
+            };
+
+            recognition.onerror = (event) => {
+                console.error('Speech recognition error:', event.error);
+                if (event.error === 'not-allowed') {
+                    showMessage("Microphone access denied. Please allow microphone permissions to use the reading speed test.");
+                } else if (event.error !== 'no-speech') {
+                    // Ignore common 'no-speech' error if not the main issue
+                    showMessage(`An error occurred: ${event.error}. You may need to restart the test.`);
+                }
+                stopRecognition(true);
+            };
+
+            recognition.onend = () => {
+                if (isReading) {
+                    // Restart recognition if it stops unexpectedly (e.g., due to browser timeout)
+                    if (currentWordIndex < totalWords) {
+                        setTimeout(() => {
+                            if (isReading) { // Check if we are still meant to be reading
+                                console.log('Recognition ended unexpectedly. Restarting...');
+                                recognition.start();
+                            }
+                        }, 500);
+                    } else {
+                        // Test finished successfully
+                        stopRecognition();
+                    }
+                }
+            };
+
+            try {
+                recognition.start();
+            } catch (e) {
+                if (e.name === 'InvalidStateError') {
+                    console.warn("Recognition already started. Ignoring start call.");
+                } else {
+                    console.error("Failed to start recognition:", e);
+                    showMessage("Could not start speech recognition. Check console for details.");
+                }
+            }
+        };
+
+        /**
+         * Processes the recognized text to find matching words and update the index.
+         * This function handles the real-time matching and highlighting.
+         * @param {string} transcript The recognized text in lowercase.
+         */
+        const processRecognizedText = (transcript) => {
+            if (!isReading) return;
+
+            const recognizedWords = cleanAndSplitQuote(transcript);
+            let initialIndex = currentWordIndex;
+
+            console.log(`--- Real-Time Match Attempt ---`);
+            console.log(`[Recognition] Transcript heard: "${transcript}"`);
+            console.log(`[Matching] Starting at index: ${initialIndex}. Expected word: ${quoteWords[initialIndex]}`);
+
+            let foundMatch = false;
+
+            for (const recognizedWord of recognizedWords) {
+                if (currentWordIndex < totalWords) {
+                    const expectedWord = quoteWords[currentWordIndex];
+
+                    if (recognizedWord === expectedWord) {
+                        currentWordIndex++;
+                        foundMatch = true;
+                        console.log(`[Match] Successfully read "${recognizedWord}". New index: ${currentWordIndex}`);
+                    } else {
+                        // Stop matching if a word is out of sequence. This is necessary for accurate speed testing.
+                        console.log(`[Mismatch] Recognized "${recognizedWord}" but expected "${expectedWord}". Stopping sequence check.`);
+                        break;
+                    }
+                }
+            }
+            console.log(`-------------------------------`);
+
+            if (foundMatch) {
+                // This updates the highlighting immediately, making it feel real-time.
+                updateHighlighting(currentWordIndex);
+
+                // Check for completion
+                if (currentWordIndex >= totalWords) {
+                    statusMessageEl.textContent = 'Complete! Calculating results...';
+                    stopRecognition();
+                } else {
+                    const wordsLeft = totalWords - currentWordIndex;
+                    statusMessageEl.textContent = `Listening... ${wordsLeft} word${wordsLeft !== 1 ? 's' : ''} left.`;
+                }
+            }
+        };
+
+        /**
+         * Stops the recognition and calculates WPM.
+         * @param {boolean} [isError=false] True if stopping due to an error.
+         */
+        const stopRecognition = (isError = false) => {
+            if (recognition && isReading) {
+                isReading = false;
+                recognition.stop();
+                console.log('Speech recognition stopped.');
+
+                // Stop time and calculate
+                const endTime = performance.now();
+                const totalTimeSeconds = (endTime - startTime) / 1000;
+                const wordsRead = currentWordIndex;
+
+                calculateWPM(wordsRead, totalTimeSeconds, isError);
+            }
+
+            // Reset UI
+            startButton.textContent = 'Start Reading';
+            startButton.classList.remove('bg-red-600', 'hover:bg-red-700');
+            startButton.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+        };
+
+        /**
+         * Calculates and displays the WPM results.
+         * @param {number} wordsRead Number of words successfully matched.
+         * @param {number} totalTimeSeconds Time taken in seconds.
+         * @param {boolean} isError If the test ended due to an error.
+         */
+        const calculateWPM = (wordsRead, totalTimeSeconds, isError) => {
+            if (isError || wordsRead === 0 || totalTimeSeconds === 0) {
+                statusMessageEl.textContent = 'Test stopped or failed. No results calculated.';
+                resultsDisplayEl.classList.add('hidden');
+                currentWordIndex = 0;
+                updateHighlighting(0);
+                return;
+            }
+
+            const totalTimeMinutes = totalTimeSeconds / 60;
+            const wpm = Math.round(wordsRead / totalTimeMinutes);
+
+            wpmResultEl.textContent = isFinite(wpm) ? wpm : 'N/A';
+            timeResultEl.textContent = `${totalTimeSeconds.toFixed(2)} seconds`;
+            resultsDisplayEl.classList.remove('hidden');
+
+            const statusText = (wordsRead === totalWords)
+                ? `Reading complete! Your score is ${wpm} WPM.`
+                : `Test stopped early. You read ${wordsRead} of ${totalWords} words. Score: ${wpm} WPM.`;
+
+            statusMessageEl.textContent = statusText;
+        };
+
+        /**
+         * Toggles the reading state (Start/Stop).
+         */
+        window.toggleReading = () => {
+            if (isReading) {
+                stopRecognition();
+            } else {
+                // Reset state for a new test
+                currentWordIndex = 0;
+                startTime = 0;
+                // Re-render and ensure highlight is reset to 0
+                renderQuote();
+                startRecognition();
+            }
+        };
+
+        // --- Initialization on load ---
+        window.onload = () => {
+            // Ensure the dynamic quote is fetched when the page loads
+            fetchNewQuote();
+        };
+
+    </script>
+</body>
+</html>
